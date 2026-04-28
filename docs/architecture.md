@@ -222,3 +222,73 @@ syllable — no TTS hand-off.
 - The websocket handler is still in the ``# pragma: no cover`` region per
   decision 0002. The greeting trigger was verified end-to-end with a real
   Twilio call rather than via mocked unit tests.
+
+---
+
+## 0004 — oratium is a library, not a platform
+
+**Date:** 2026-04-28
+
+**Context.** Phase 1 ships a quickstart where the agent is defined entirely
+in Python (``Agent(name=..., instructions=..., voice=..., model=...)``).
+Phase 2 will introduce per-tenant configuration loaded from YAML or Postgres.
+Before that abstraction lands, the question that shapes every later phase is:
+who is oratium *for*, and how do they configure agents? The README answers
+this in the comparison table ("Hosted UI (intentionally)" as the trade-off vs
+Vapi / Bland), but the architecture log has not yet captured the underlying
+decision or its consequences for the API.
+
+**Decision.** Oratium is a library for **developers**, not a platform for
+**non-technical users**. Adopters configure agents in two modes:
+
+1. **In Python code** (Phase 1 onward) — ``oratium.Agent(...)`` constructed
+   in the user's application, suitable for single-tenant or programmatic
+   use cases.
+2. **In declarative config** (Phase 2 onward) — Pydantic-validated tenant
+   definitions loaded from YAML or a database (SQLite / Postgres), suitable
+   for multi-tenant deployments.
+
+Both paths produce the same ``oratium.Agent`` object internally. There is no
+admin UI, no SaaS console, no web flow for editing tenants. The audience is
+engineers; the calling end-user (the person dialing the phone number) does
+not configure anything.
+
+**Alternatives considered.**
+
+- **Bundle a web UI for tenant management.** Considered. Would broaden the
+  audience to ops / non-engineers and accelerate adoption for fintech buyers
+  who want a turnkey console. Rejected for v0: bundling a UI doubles the
+  surface area, pulls in frontend deps that fight the "boring Python
+  library" stack decision, and turns oratium into a competitor of Vapi
+  rather than a building block they themselves could be built on. A separate
+  ``oratium-admin`` project can supply this layer if there is real demand.
+
+- **Become a hosted SaaS** like Vapi / Bland. Rejected as out of scope. The
+  evidence value of this project comes from being an open, adoptable library
+  that other developers and organizations build on — not a hosted
+  competitor. SaaS is a different product with different adoption mechanics.
+
+- **Code-only configuration (no YAML / DB).** Considered. Simplest API
+  surface. Rejected: every adopter beyond a single-tenant prototype would
+  need to redeploy on a tenant change, which contradicts the multi-tenancy
+  contribution gap (gap 1 in ``CONTEXT.md``). YAML / DB is cheap to add and
+  unlocks the production deployment shape.
+
+**Consequences.**
+
+- **Audience.** Documentation, examples, and design choices target software
+  engineers comfortable with Python, YAML, and (for the Postgres path) a
+  schema migration tool. There is no "settings UI" to optimize for.
+- **Tools and capabilities** (Phase 4) split along the same line: function
+  tools must be Python code (referenced from declarative config by import
+  path); knowledge sources, MCP servers, and data tables can be
+  config-only (URLs, paths, connection strings).
+- **Scaling.** Adding a tenant in production is a config or DB change, not
+  a deploy. Phase 2's tenant-resolution contract makes this explicit.
+- **Future UI.** If a UI is ever wanted, it lives in a separate project
+  (e.g., ``oratium-admin``) that depends on oratium. The core library
+  stays focused on the runtime + storage primitives.
+- **Both configuration modes coexist.** ``OratiumApp(agent=...)``
+  (single-tenant, Phase 1) and ``OratiumApp(tenants=...)`` (multi-tenant,
+  Phase 2) are not deprecated alternatives — they are two valid entry
+  points for two valid scales. The library supports both indefinitely.

@@ -292,3 +292,127 @@ not configure anything.
   (single-tenant, Phase 1) and ``OratiumApp(tenants=...)`` (multi-tenant,
   Phase 2) are not deprecated alternatives — they are two valid entry
   points for two valid scales. The library supports both indefinitely.
+
+---
+
+## 0005 — Tenant model and storage architecture
+
+**Date:** 2026-04-28
+
+**Context.** Phase 2 introduces multi-tenant configuration: many agents on
+one oratium deployment, routed by Twilio number. This requires a tenant
+model, a storage interface with several backend implementations, a tenant
+resolution path through the request lifecycle, and a migration story. The
+shape of these abstractions constrains every later phase — Phase 3's
+secrets, Phase 4's tools, Phase 5's per-tenant observability all attach to
+the same ``Tenant`` object. Decision 0004 establishes that tenant config
+lives in YAML or a database, not a UI.
+
+**Decision.**
+
+- **Tenant model: Pydantic BaseModel** (not a dataclass like
+  ``oratium.Agent``). Tenants come from external sources (YAML, DB, future
+  config endpoints) and need validation; ``oratium.Agent`` is constructed
+  in code by the developer and doesn't. Two different concerns. The
+  ``Tenant`` model carries an ``id``, an E.164-validated ``twilio_number``,
+  and an ``agent`` sub-model (``TenantAgentConfig``) with the same shape as
+  ``oratium.Agent``'s public knobs. ``Tenant.to_runtime_agent()`` builds
+  the runtime ``Agent`` for the websocket session.
+
+- **Storage interface: ``TenantStore`` Protocol** (not ABC). Async methods:
+  ``get_by_twilio_number``, ``get_by_id``, ``list_all``. Async even for
+  in-memory backends so the OratiumApp websocket handler has one signature
+  to call. Three implementations ship in v0:
+
+  | Backend | When to use |
+  | --- | --- |
+  | ``YAMLTenantStore`` | Dev, single-server, ~10 tenants, redeploy on change. Config-as-code workflow. |
+  | ``SQLiteTenantStore`` | Single-node prod, hundreds of tenants, no separate DB infra. Dynamic updates without redeploy. |
+  | ``PostgresTenantStore`` | Multi-node prod, lots of tenants, shared state across oratium replicas. |
+
+  All three implement the same Protocol; swapping is a one-line change in
+  the OratiumApp construction.
+
+- **Tenant routing: Twilio ``To`` parameter at the webhook, threaded
+  through to the websocket via URL query.** Twilio's POST to
+  ``/incoming-call`` includes a ``To`` form field with the called E.164
+  number. The webhook resolves the tenant via
+  ``store.get_by_twilio_number(to)``, then generates TwiML with
+  ``wss://host/media-stream?tenant={id}``. The websocket handler reads
+  the query param, refetches the tenant by id, builds the agent. Tenant
+  resolution happens *once* at webhook time; the websocket handler trusts
+  the resolved id.
+
+- **Coexistence with single-tenant mode.** ``OratiumApp(agent=Agent(...))``
+  (Phase 1) and ``OratiumApp(tenants=TenantStore(...))`` (Phase 2) are
+  mutually exclusive constructor modes. Exactly one must be provided.
+  Single-tenant mode skips the tenant lookup and uses the configured
+  agent for every call. This preserves the Phase 1 quickstart unchanged.
+
+- **SQL schema: tenants table with a JSON ``agent_config`` column** (not
+  fully normalized). Agent shape (instructions, voice, model, eventually
+  tools / knowledge / MCP) evolves quickly; storing it as JSON means
+  schema migrations are needed for tenant-level fields (id, twilio_number,
+  enabled, ...) but not for agent-shape changes. We never query *into*
+  agent_config — lookup is by id or twilio_number only — so the loss of
+  SQL queryability is free.
+
+- **Postgres migrations: Alembic.** Migrations live inside the package at
+  ``oratium/storage/migrations/``, so they ship to adopters with the wheel.
+  An ``oratium-migrate`` console-script entry point invokes Alembic against
+  the user's ``DATABASE_URL``. SQLite uses ``Base.metadata.create_all()``
+  on first run — no migrations needed for an embedded DB whose schema we
+  control end-to-end.
+
+**Alternatives considered.**
+
+- **Dataclass for Tenant (consistency with Agent).** Would lose
+  Pydantic's free YAML / JSON validation and the E.164 number constraint.
+  Rejected — consistency for its own sake isn't worth re-implementing
+  validation by hand for every external loader.
+
+- **Sync ``TenantStore``.** Simpler interface for the YAML case. Rejected
+  — DB backends need async (asyncpg, aiosqlite), and forcing a unified
+  sync interface would block the FastAPI event loop on DB queries.
+
+- **Tenant routing via Twilio Custom Parameters in the ``<Stream>`` tag**
+  (instead of URL query). More idiomatic Twilio. Rejected for v0 because
+  custom parameters arrive in the ``start`` event mid-stream — the
+  websocket handler would have to defer session setup until the first
+  message arrives. URL query lets us resolve and validate at handshake
+  time, fail fast on unknown tenants. Reconsider in a later phase if
+  Custom Parameters bring something we need.
+
+- **Look up tenant in the websocket handler instead of the webhook.** The
+  websocket alone doesn't know the called number (Twilio doesn't send it
+  in the WS handshake). Without webhook-side resolution, we'd need a
+  Twilio API callback to look up the call by ``CallSid``, adding a
+  network round trip and a Twilio API key dependency just for routing.
+
+- **Normalize the SQL schema (one column per agent field).** Future-proof
+  if we ever want to query "show me all tenants using voice X". Rejected
+  — Phase 4 will add a dozen more agent fields (tool URIs, MCP servers,
+  knowledge sources); migrating each one is friction. Keep it JSON until
+  a real query need emerges.
+
+- **Skip Alembic, use ``create_all()`` everywhere.** Simpler. Rejected for
+  Postgres because production schema changes will happen and ad-hoc
+  ``ALTER TABLE`` is unsafe. Alembic is the standard.
+
+**Consequences.**
+
+- **The Phase 1 quickstart keeps working.** ``OratiumApp(agent=agent)``
+  remains the simplest entry point. Multi-tenant is opt-in.
+- **Adding a tenant in production is a config change** (YAML edit + reload,
+  or a SQL INSERT) — not a deploy. This satisfies the multi-tenancy
+  contribution gap.
+- **Phase 3's secrets** attach to the ``Tenant`` model as an encrypted
+  field. The schema change is one new column on the tenants table —
+  Alembic handles it.
+- **Phase 4's tools / MCP / knowledge** attach to ``TenantAgentConfig``
+  as new sub-models. Stored as JSON, no migration needed.
+- **Tenant lookup is on the call-setup hot path** but happens at HTTP
+  webhook time (not the WS audio loop), so latency is uncontroversial:
+  one DB query per call.
+- **The ``oratium-migrate`` CLI** ships with the package. Adopters running
+  Postgres run it once on first boot and again after each upgrade.

@@ -1,0 +1,27 @@
+# Multi-tenant configuration for the oratium multi-tenant example.
+# Replace the twilio_number values with your actual Twilio numbers (E.164 format).
+
+tenants:
+  - id: support-line
+    twilio_number: "+15555550100"
+    agent:
+      name: Support
+      instructions: |
+        You are a customer support agent on a phone call. The call has just
+        connected. Open with a brief, warm greeting (one sentence) and ask
+        how you can help. Keep all subsequent responses concise and
+        conversational, since this is a phone call.
+      voice: alloy
+      model: gpt-4o-realtime-preview-2024-12-17
+
+  - id: sales-line
+    twilio_number: "+15555550200"
+    agent:
+      name: Sales
+      instructions: |
+        You are an enthusiastic sales associate on a phone call. The call
+        has just connected. Greet the caller warmly with one sentence, ask
+        what brings them in today, and listen actively. Keep responses
+        concise and friendly.
+      voice: verse
+      model: gpt-4o-realtime-preview-2024-12-17

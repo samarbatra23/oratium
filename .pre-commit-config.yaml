@@ -34,5 +34,6 @@ repos:
         args: [--config-file=pyproject.toml]
         additional_dependencies:
           - pydantic>=2.9
+          - fastapi>=0.115
           - types-redis
           - types-requests

@@ -75,3 +75,87 @@ breaking any oratium consumer's import path or behavior.
   `examples/realtime/twilio/twilio_handler.py`, verify the example still works
   end-to-end against the current `openai-agents` version. The SDK is in beta
   and behavior may have shifted since the example was written.
+
+---
+
+## 0002 — Phase 1 public API surface
+
+**Date:** 2026-04-28
+
+**Context.** Phase 1 ships the first public API surface adopters will see:
+`oratium.Agent`, `oratium.OratiumApp`, and
+`oratium.transport.twilio.TwilioMediaStreamTransport`. The shape of these
+classes constrains every later phase. The README quickstart promises that
+`app = OratiumApp(agent=agent)` works as an ASGI app for uvicorn; the
+docstrings promise the transport class is pluggable when an upstream Python
+adapter ships (decision 0001). The SDK smoke-test (decision 0001's deliverable)
+also revealed that `agents.realtime.RealtimeAgent` does not accept a `voice`
+argument — voice belongs in the per-session `model_config` — so the wrapper
+shape is forced.
+
+**Decision.** Three small, opinionated classes with these contracts:
+
+- **`oratium.Agent`** is a regular dataclass holding `name`, `instructions`,
+  `voice`, `tools`, `model`. It exposes `to_realtime_agent()` to produce the
+  underlying SDK `RealtimeAgent` and `model_config(api_key, playback_tracker)`
+  to produce the dict consumed by `RealtimeRunner.run`. Voice and model live
+  here even though they are applied at session-creation time, because that is
+  where adopters expect them in the public API.
+
+- **`oratium.transport.twilio.TwilioMediaStreamTransport`** *receives* an
+  already-configured `RealtimeSession` and `RealtimePlaybackTracker`; it does
+  not create them. `run()` is a single async method that accepts the
+  websocket, then concurrently runs three loops via `asyncio.TaskGroup`:
+  (1) Twilio messages → session, (2) session events → Twilio, (3) periodic
+  buffer flush. Audio passes through as G.711 μ-law on both sides — both
+  Twilio and OpenAI Realtime accept it natively, so no transcoding layer.
+  Event dispatch uses `isinstance(event, RealtimeAudio | RealtimeAudioInterrupted)`
+  rather than string-type matching, for type narrowing under mypy.
+
+- **`oratium.OratiumApp`** holds an internal FastAPI instance and implements
+  `__call__(scope, receive, send)` so the instance itself is an ASGI app.
+  This is what enables the README's `uvicorn module:app` pattern with
+  `app = OratiumApp(agent=agent)`. The websocket handler creates a session
+  per call and delegates to `TwilioMediaStreamTransport.run()`.
+
+**Alternatives considered.**
+
+- **Transport creates its own session** (instead of receiving one). Simpler
+  one-class API but couples the transport to API-key and agent concerns and
+  makes the upstream-swap path harder. Rejected — separation of concerns
+  beats one-class convenience here, especially given the upstream-swap
+  invariant from decision 0001.
+
+- **Match events on `event.type == "audio"` strings** (the SDK example's
+  pattern) instead of `isinstance`. Slightly shorter; works at runtime.
+  Rejected because mypy can narrow `isinstance` checks but not Literal
+  string comparisons in our union, and we want type-safety on event handling.
+
+- **Subclass FastAPI from OratiumApp.** Simplest possible "uvicorn just works"
+  pattern. Rejected because it leaks every FastAPI method onto the oratium
+  surface and pins us to FastAPI internals; composition with `__call__`
+  delegation is cleaner and gives us `OratiumApp.fastapi` for users who need
+  the underlying instance.
+
+- **Return TwiML from `incoming-call` as a Pydantic model.** Rejected — TwiML
+  is XML; we return a `PlainTextResponse(media_type="text/xml")` directly.
+
+**Consequences.**
+
+- The transport class is genuinely pluggable. The day OpenAI ships a Python
+  `TwilioRealtimeTransportLayer`, decision 0001's swap path is: keep
+  `TwilioMediaStreamTransport` as the import name, replace its body with a
+  thin wrapper that delegates to the upstream class, ship a deprecation note
+  pointing at the upstream import. Adopters never see a breaking change.
+- The websocket handler in `OratiumApp` is small but exercises real SDK
+  surfaces (`RealtimeRunner`, `RealtimeSession.enter`, `await transport.run()`).
+  Unit-testing it would mostly exercise the SDK rather than oratium logic, so
+  it is marked `# pragma: no cover` for Phase 1; integration coverage comes
+  from the quickstart example. Phase 4+ may add an integration test that
+  mocks the SDK.
+- Audio passthrough (no transcoding) means oratium has zero CPU cost for
+  audio. If a future telephony layer doesn't support μ-law, the transcoding
+  responsibility falls on that transport's adapter, not on oratium core.
+- `oratium.Agent` is intentionally separate from `agents.realtime.RealtimeAgent`.
+  Phase 4's `UnifiedTools` layer will plug in here without changing
+  `RealtimeAgent`'s shape.

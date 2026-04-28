@@ -2,9 +2,41 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from oratium.agent import DEFAULT_MODEL, DEFAULT_VOICE, Agent
+from oratium.tools.data_tables import DataTable
+from oratium.tools.functions import resolve_function_path
+from oratium.tools.mcp import MCPServerSpec
+from oratium.tools.unified import UnifiedTools
+
+
+class TenantToolsConfig(BaseModel):
+    """Declarative tool configuration loaded from YAML / DB.
+
+    ``functions`` are import paths (e.g. ``"myapp.tools.transfer_to_human"``)
+    because Python callables can't live in YAML. The other categories are
+    config-only. :meth:`resolve` returns a :class:`UnifiedTools` instance
+    ready for the runtime agent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    functions: list[str] = Field(default_factory=list)
+    knowledge: list[str] = Field(default_factory=list)
+    data_tables: list[DataTable] = Field(default_factory=list)
+    mcp_servers: list[str | MCPServerSpec] = Field(default_factory=list)
+
+    def resolve(self) -> UnifiedTools:
+        """Resolve import paths and build a :class:`UnifiedTools` instance."""
+        return UnifiedTools(
+            functions=[resolve_function_path(p) for p in self.functions],
+            knowledge=list(self.knowledge),
+            data_tables=list(self.data_tables),
+            mcp_servers=list(self.mcp_servers),
+        )
 
 
 class TenantAgentConfig(BaseModel):
@@ -22,6 +54,7 @@ class TenantAgentConfig(BaseModel):
     instructions: str | None = None
     voice: str = DEFAULT_VOICE
     model: str = DEFAULT_MODEL
+    tools: TenantToolsConfig | None = None
 
 
 class TenantSecrets(BaseModel):
@@ -54,11 +87,15 @@ class Tenant(BaseModel):
 
     def to_runtime_agent(self) -> Agent:
         """Build the runtime :class:`oratium.Agent` from this tenant's config."""
+        tools_payload: list[Any] | UnifiedTools = (
+            self.agent.tools.resolve() if self.agent.tools else []
+        )
         return Agent(
             name=self.agent.name,
             instructions=self.agent.instructions,
             voice=self.agent.voice,
             model=self.agent.model,
+            tools=tools_payload,
         )
 
     def resolve_api_key(self, fallback: str) -> str:

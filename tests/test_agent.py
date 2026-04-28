@@ -1,6 +1,9 @@
+from agents import function_tool
 from agents.realtime import RealtimeAgent, RealtimePlaybackTracker
 
 from oratium.agent import DEFAULT_MODEL, DEFAULT_VOICE, Agent
+from oratium.tools.data_tables import DataTable
+from oratium.tools.unified import UnifiedTools
 
 
 def test_minimal_construction() -> None:
@@ -82,3 +85,63 @@ def test_model_config_turn_detection_defaults() -> None:
     assert td["type"] == "semantic_vad"
     assert td["interrupt_response"] is True
     assert td["create_response"] is True
+
+
+# --- Phase 4: UnifiedTools support on Agent ---
+
+
+@function_tool
+def _phase4_example(x: int) -> int:
+    """Example tool for Phase 4 tests."""
+    return x
+
+
+def test_agent_accepts_list_of_callables_phase1_compat() -> None:
+    """Backward compat: a bare list of function tools still works."""
+    agent = Agent(name="x", tools=[_phase4_example])
+    realtime = agent.to_realtime_agent()
+    assert len(realtime.tools) == 1
+
+
+def test_agent_accepts_unified_tools() -> None:
+    agent = Agent(
+        name="x",
+        tools=UnifiedTools(
+            functions=[_phase4_example],
+            data_tables=[DataTable(name="t", rows=[{"k": "v"}])],
+        ),
+    )
+    realtime = agent.to_realtime_agent()
+    assert len(realtime.tools) == 2  # function + query_t
+
+
+def test_agent_passes_mcp_servers_through_to_sdk() -> None:
+    agent = Agent(
+        name="x",
+        tools=UnifiedTools(mcp_servers=["https://mcp.example.com"]),
+    )
+    realtime = agent.to_realtime_agent()
+    assert len(realtime.mcp_servers) == 1
+
+
+def test_agent_with_knowledge_requires_api_key() -> None:
+    import pytest
+
+    agent = Agent(name="x", tools=UnifiedTools(knowledge=["./doc.pdf"]))
+    with pytest.raises(ValueError, match="api_key"):
+        agent.to_realtime_agent()
+
+
+def test_agent_with_knowledge_and_api_key_succeeds() -> None:
+    """Construction shouldn't make any OpenAI calls; the embedder is lazy."""
+    agent = Agent(name="x", tools=UnifiedTools(knowledge=["./doc.pdf"]))
+    realtime = agent.to_realtime_agent(api_key="sk-test")
+    assert len(realtime.tools) == 1
+    assert realtime.tools[0].name == "search_knowledge"
+
+
+def test_agent_empty_tools_list_yields_no_sdk_tools() -> None:
+    agent = Agent(name="x")
+    realtime = agent.to_realtime_agent()
+    assert realtime.tools == []
+    assert realtime.mcp_servers == []

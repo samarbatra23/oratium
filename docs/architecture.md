@@ -541,3 +541,117 @@ protocol need extension without breaking Phase 1 / Phase 2 callers.
   ``python -c "from cryptography.fernet import Fernet;
   print(Fernet.generate_key().decode())"`` recipe in
   ``.env.example`` (already there since Phase 0).
+
+---
+
+## 0007 — Unified tool endpoint
+
+**Date:** 2026-04-28
+
+**Context.** Phase 4 realizes contribution gap #2 from CONTEXT.md: a single
+function-call interface to the agent that fronts heterogeneous capability
+types (plain functions, MCP servers, knowledge bases, structured data
+tables). The OpenAI Agents SDK treats functions and MCP servers as separate
+parameters on ``RealtimeAgent``; tutorials never combine them with knowledge
+/ structured data; existing voice agent frameworks force adopters to wire
+each capability separately. oratium's value-add is one configuration schema,
+one runtime collector, and one resolved tools list to the agent.
+
+**Decision.**
+
+- **``oratium.UnifiedTools`` collects four categories** in a single
+  dataclass:
+  - ``functions: list[Callable]`` — ``@function_tool``-decorated callables
+    (or anything the SDK accepts as a tool).
+  - ``knowledge: list[str | KnowledgeSource]`` — PDF paths or web URLs.
+  - ``data_tables: list[DataTable]`` — in-memory row sets with named
+    schemas.
+  - ``mcp_servers: list[str | MCPServerSpec]`` — URL-addressable MCP
+    servers.
+
+  Two resolver methods:
+  - ``.to_realtime_tools(api_key)`` → ``list`` of SDK tools
+    (functions + a synthesized ``search_knowledge`` per knowledge source +
+    a synthesized ``query_<table>`` per data table).
+  - ``.to_mcp_servers()`` → ``list[MCPServer]`` for ``RealtimeAgent``'s
+    ``mcp_servers=`` parameter.
+
+- **Knowledge as in-process RAG.** PDF (via ``pypdf``) or web URL (via
+  ``httpx`` + ``beautifulsoup4``) → text chunked at paragraph
+  boundaries (~1000 chars) → OpenAI ``text-embedding-3-small`` →
+  in-memory list of ``(chunk, embedding)``. Lazy-loaded on first search
+  call. At query time: embed the query, cosine similarity, return
+  top-k chunks formatted as a single string. Adopters who need
+  Pinecone / Weaviate / FAISS swap the index implementation behind
+  the same ``KnowledgeIndex`` interface (post-v0, MVP_SCOPE 0.3).
+
+- **Data tables as in-memory rows + equality filter.** Each
+  ``DataTable`` has a ``name``, ``description``, and ``rows`` (list of
+  dicts). Becomes a function tool ``query_<name>(**filters)`` that
+  returns matching rows as a JSON-serializable list. Schema is
+  inferred from the first row. Future SQL-backed tables would
+  implement the same surface.
+
+- **MCP servers via the SDK's ``MCPServerStreamableHttp``.** Plain
+  string entries are interpreted as ``{"url": <str>}``; richer entries
+  can carry headers and timeouts. oratium's contribution is the
+  configuration glue: lift URLs from tenant YAML / DB into the right
+  SDK class at session-creation time.
+
+- **Tenant config grows ``agent.tools``** with all four sub-lists.
+  Functions reference Python callables by import path
+  (``"examples.with_tools.tools.transfer_to_human"``); resolution
+  happens at startup with a clear error if the import fails. Other
+  categories are config-only.
+
+- **``oratium.Agent.tools`` accepts a ``UnifiedTools`` instance OR a
+  bare ``list`` of callables (Phase 1 backward compat).** A list is
+  treated as ``UnifiedTools(functions=that_list)``.
+
+**Alternatives considered.**
+
+- **Common ``Tool`` ABC for everything.** Would unify the implementation
+  story but push subclassing onto adopter code (every new function
+  becomes a ``MyTool(Tool)``). Rejected — keep the agent's interface to
+  its tools idiomatic Python (callables); UnifiedTools handles the
+  dispatching.
+
+- **OpenAI's hosted ``file_search`` / vector store for knowledge.**
+  Would outsource RAG to OpenAI's infra. Rejected for v0: pins
+  knowledge storage to OpenAI, costs money, doesn't extend to non-PDF
+  sources, and silently couples the "we are pluggable" promise to one
+  vendor. In-process RAG keeps oratium provider-neutral and lets
+  adopters plug in their own vector backends behind the
+  ``KnowledgeIndex`` interface.
+
+- **Per-capability tenant config** (``agent.functions:``,
+  ``agent.knowledge:`` flat). Rejected — grouping under
+  ``agent.tools.{...}`` matches the runtime ``UnifiedTools`` shape and
+  keeps related concerns together.
+
+- **Skip data tables** (let adopters implement them as plain function
+  tools). Rejected — the unified-endpoint contribution is "all four
+  types behind one config schema", and shipping data tables validates
+  the pattern works for non-knowledge structured data.
+
+- **Synchronous knowledge index.** Embedding calls go to OpenAI;
+  blocking on them would freeze the event loop. Async throughout.
+
+**Consequences.**
+
+- The README's quickstart promise — one ``UnifiedTools(...)`` call wires
+  everything — is now real.
+- Knowledge ingestion happens at agent construction (lazy on first
+  search). For very large KBs this could be slow on the first call;
+  v0.x can add background pre-warming.
+- Tools that need credentials (e.g., MCP server auth tokens, knowledge
+  in S3) currently rely on environment / inline config. Phase 4.5 will
+  extend ``TenantSecrets`` with ``tool_credentials: dict[str, str]``
+  for per-tenant tool auth.
+- The synthesized tool names (``search_knowledge``,
+  ``query_<table_name>``) become part of the agent's prompt surface.
+  Naming collisions across tool categories would be a footgun;
+  ``UnifiedTools`` validates uniqueness at construction.
+- Adding a new tool category later (webhook-based, GraphQL,
+  vector-search backends) is one new field on UnifiedTools + one
+  resolver in ``.to_realtime_tools``. The pattern is established.

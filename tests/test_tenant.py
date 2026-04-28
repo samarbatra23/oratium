@@ -4,7 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from oratium.agent import DEFAULT_MODEL, DEFAULT_VOICE, Agent
-from oratium.tenant import Tenant, TenantAgentConfig, TenantSecrets
+from oratium.tenant import Tenant, TenantAgentConfig, TenantSecrets, TenantToolsConfig
+from oratium.tools.data_tables import DataTable
+from oratium.tools.unified import UnifiedTools
 
 
 def test_tenant_minimal_construction() -> None:
@@ -172,3 +174,68 @@ def test_resolve_api_key_falls_back_when_secrets_field_is_none() -> None:
         secrets=TenantSecrets(),  # secrets present but openai_api_key=None
     )
     assert tenant.resolve_api_key("sk-fallback") == "sk-fallback"
+
+
+# --- TenantToolsConfig (Phase 4) ---
+
+
+def test_tenant_tools_config_default_is_empty() -> None:
+    tools = TenantToolsConfig()
+    assert tools.functions == []
+    assert tools.knowledge == []
+    assert tools.data_tables == []
+    assert tools.mcp_servers == []
+
+
+def test_tenant_tools_config_loads_from_dict() -> None:
+    tools = TenantToolsConfig.model_validate(
+        {
+            "functions": ["json.dumps"],
+            "knowledge": ["./policies.pdf"],
+            "data_tables": [{"name": "products", "rows": [{"id": "P1"}]}],
+            "mcp_servers": ["https://mcp.example.com"],
+        }
+    )
+    assert tools.functions == ["json.dumps"]
+    assert tools.knowledge == ["./policies.pdf"]
+    assert tools.data_tables[0].name == "products"
+    assert tools.mcp_servers == ["https://mcp.example.com"]
+
+
+def test_tenant_tools_config_resolves_to_unified_tools() -> None:
+    tools_cfg = TenantToolsConfig(
+        functions=["json.dumps"],
+        data_tables=[DataTable(name="customers")],
+    )
+    unified = tools_cfg.resolve()
+    assert isinstance(unified, UnifiedTools)
+    assert len(unified.functions) == 1
+    assert unified.functions[0].__name__ == "dumps"
+    assert unified.data_tables[0].name == "customers"
+
+
+def test_tenant_with_tools_to_runtime_agent() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(
+            name="Support",
+            tools=TenantToolsConfig(
+                data_tables=[DataTable(name="customers", rows=[{"id": "C1"}])],
+            ),
+        ),
+    )
+    agent = tenant.to_runtime_agent()
+    assert isinstance(agent, Agent)
+    assert isinstance(agent.tools, UnifiedTools)
+    assert agent.tools.data_tables[0].name == "customers"
+
+
+def test_tenant_without_tools_to_runtime_agent_has_empty_list_tools() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(name="Plain"),
+    )
+    agent = tenant.to_runtime_agent()
+    assert agent.tools == []  # Phase 1 backward compat: list, not UnifiedTools

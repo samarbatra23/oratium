@@ -12,14 +12,18 @@ from oratium.storage import (
     TenantStore,
     YAMLTenantStore,
 )
-from oratium.tenant import Tenant, TenantAgentConfig, TenantSecrets
+from oratium.tenant import Tenant, TenantAgentConfig, TenantSecrets, TenantToolsConfig
+from oratium.tools import DataTable, KnowledgeIndex, MCPServerSpec, UnifiedTools
 
 __version__ = "0.0.1"
 
 __all__ = [
     "Agent",
+    "DataTable",
     "FernetCipher",
     "InMemorySessionStore",
+    "KnowledgeIndex",
+    "MCPServerSpec",
     "OratiumApp",
     "PostgresTenantStore",
     "RedisSessionStore",
@@ -29,6 +33,8 @@ __all__ = [
     "TenantAgentConfig",
     "TenantSecrets",
     "TenantStore",
+    "TenantToolsConfig",
+    "UnifiedTools",
     "YAMLTenantStore",
     "__version__",
 ]

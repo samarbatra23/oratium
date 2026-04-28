@@ -8,6 +8,8 @@ from typing import Any, cast
 from agents.realtime import RealtimeAgent
 from agents.realtime.model import RealtimeModelConfig
 
+from oratium.tools.unified import UnifiedTools
+
 DEFAULT_MODEL = "gpt-realtime"
 DEFAULT_VOICE = "alloy"
 
@@ -30,8 +32,10 @@ class Agent:
     voice:
         OpenAI Realtime voice (e.g. ``"alloy"``, ``"verse"``).
     tools:
-        Tools the agent may call. Each must be a function decorated with
-        :func:`agents.function_tool` or an SDK ``Tool`` instance.
+        Either a list of ``@function_tool``-decorated callables (Phase 1
+        backward compat) or a :class:`oratium.UnifiedTools` instance
+        (Phase 4) that bundles functions, knowledge sources, data tables,
+        and MCP servers.
     model:
         Realtime model identifier passed to the runtime.
     """
@@ -39,15 +43,34 @@ class Agent:
     name: str
     instructions: str | None = None
     voice: str = DEFAULT_VOICE
-    tools: list[Any] = field(default_factory=list)
+    tools: list[Any] | UnifiedTools = field(default_factory=list)
     model: str = DEFAULT_MODEL
 
-    def to_realtime_agent(self) -> RealtimeAgent[Any]:
-        """Build the underlying SDK :class:`RealtimeAgent`."""
+    def _unified(self) -> UnifiedTools | None:
+        """Return the UnifiedTools view of this agent's tools, or None if empty."""
+        if isinstance(self.tools, UnifiedTools):
+            return self.tools
+        if self.tools:
+            return UnifiedTools(functions=list(self.tools))
+        return None
+
+    def to_realtime_agent(self, *, api_key: str | None = None) -> RealtimeAgent[Any]:
+        """Build the underlying SDK :class:`RealtimeAgent`.
+
+        ``api_key`` is required only if this agent has knowledge sources
+        configured (knowledge embedding needs an OpenAI key).
+        """
+        unified = self._unified()
+        sdk_tools: list[Any] = []
+        sdk_mcp_servers: list[Any] = []
+        if unified is not None:
+            sdk_tools = unified.to_realtime_tools(api_key=api_key)
+            sdk_mcp_servers = unified.to_mcp_servers()
         return RealtimeAgent(
             name=self.name,
             instructions=self.instructions,
-            tools=list(self.tools),
+            tools=sdk_tools,
+            mcp_servers=sdk_mcp_servers,
         )
 
     def model_config(

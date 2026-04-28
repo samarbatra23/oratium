@@ -36,3 +36,23 @@ tenants:
         concise and friendly.
       voice: verse
       model: gpt-4o-realtime-preview-2024-12-17
+
+      # Optional per-tenant tools — a tenant can have any combination of
+      # function tools (referenced by Python import path), knowledge sources,
+      # data tables, and MCP servers. All four are exposed to the agent
+      # through a single function-call interface (decision 0007).
+      #
+      # tools:
+      #   functions:
+      #     - examples.with_mcp.tools.transfer_to_human
+      #   knowledge:
+      #     - ./sales_playbook.pdf
+      #     - https://docs.example.com/pricing
+      #   data_tables:
+      #     - name: products
+      #       description: Product catalog with prices and stock
+      #       rows:
+      #         - {sku: P001, name: Widget, price: 9.99, stock: 42}
+      #         - {sku: P002, name: Gadget, price: 19.99, stock: 0}
+      #   mcp_servers:
+      #     - https://crm-mcp.example.com

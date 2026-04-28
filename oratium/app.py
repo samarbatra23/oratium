@@ -172,7 +172,7 @@ class OratiumApp:
         agent, api_key = resolution
 
         playback_tracker = RealtimePlaybackTracker()
-        runner = RealtimeRunner(agent.to_realtime_agent())
+        runner = RealtimeRunner(agent.to_realtime_agent(api_key=api_key))
         session = await runner.run(
             model_config=agent.model_config(
                 api_key=api_key,

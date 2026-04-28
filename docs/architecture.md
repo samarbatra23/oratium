@@ -427,3 +427,117 @@ the websocket connection arrived at ``/media-stream`` with no query
 string. The fix is to use a path segment (``/media-stream/{tenant_id}``)
 which Twilio reliably preserves. Implemented same-day; tests updated to
 match.
+
+---
+
+## 0006 — Secrets at rest, per-tenant API keys, session storage
+
+**Date:** 2026-04-28
+
+**Context.** Phase 3 introduces two new concerns: per-tenant secrets that
+must be encrypted at rest in production storage, and a session-state
+primitive intended to survive a process restart. CONTEXT.md flags
+encrypted credential storage as part of the production-grade reliability
+contribution gap (gap 4). The existing Tenant model and TenantStore
+protocol need extension without breaking Phase 1 / Phase 2 callers.
+
+**Decision.**
+
+- **Symmetric encryption with Fernet.** ``cryptography.Fernet`` wraps a
+  key from ``$ORATIUM_FERNET_KEY`` (already documented in
+  ``.env.example`` since Phase 0). ``oratium.secrets.FernetCipher``
+  exposes ``encrypt`` / ``decrypt`` / ``generate_key`` plus a
+  ``from_env`` classmethod. One key per deployment. Multi-key key
+  rotation is post-v0.
+
+- **Per-tenant secrets as a closed typed sub-model.**
+  ``Tenant.secrets: TenantSecrets | None`` where ``TenantSecrets`` has a
+  closed set of fields the runtime knows how to use. v0 ships one field:
+  ``openai_api_key`` (overrides the deployment-wide ``OPENAI_API_KEY``
+  for this tenant's calls). Phase 4 adds tool-specific credential
+  fields. Closed model rather than open ``dict`` gives static typing at
+  every call site and forces every new secret type to land as an
+  explicit field — a useful forcing function.
+
+- **Storage layer encryption is opt-in per backend.**
+
+  | Backend | Secrets handling |
+  | --- | --- |
+  | YAML | Plaintext in the file. YAML lives on disk / in source control; an encrypted blob in YAML defeats the point of human-edited config. Adopters who want encrypted YAML use ``sops`` / ``ansible-vault`` outside oratium. |
+  | SQLite / Postgres | Encrypted blob in a ``secrets_encrypted`` TEXT column. Encrypt on write, decrypt on read. Constructor takes an optional ``cipher: FernetCipher``; required if any tenant being written has secrets. |
+
+  The cipher is injected at store construction; encryption is transparent
+  to callers (``store.add_tenant(tenant)`` accepts a fully-decrypted
+  ``Tenant``; the store handles encryption). ``get_by_*`` returns
+  decrypted ``Tenant`` instances. Phase 4 / 5 stores need only handle
+  plaintext.
+
+- **Per-tenant API key applied at session creation.** When
+  ``OratiumApp``'s websocket handler builds the agent's
+  ``model_config``, it prefers
+  ``tenant.secrets.openai_api_key`` over the deployment-wide
+  ``self._api_key`` when present. Single-tenant mode unchanged.
+
+- **Session storage in ``oratium.storage.sessions`` (not ``redis.py``).**
+  ``SessionStore`` Protocol with async ``get`` / ``set`` / ``delete``
+  plus TTL on writes. Two implementations:
+    * ``InMemorySessionStore`` — dict + asyncio lock. Single-process,
+      dev / tests.
+    * ``RedisSessionStore`` — ``redis.asyncio`` client. Multi-process
+      production.
+
+  Filename ``sessions.py`` rather than the MVP_SCOPE-suggested
+  ``redis.py`` because ``oratium.storage.redis`` would shadow the
+  ``redis`` package import inside the same module (confusing). v0
+  establishes the primitive; Phase 5's reliability work plugs in actual
+  usage (call recovery on reconnect, fallback context, rate limiting).
+
+- **Schema migration ``0002_add_secrets``.** Adds the nullable
+  ``secrets_encrypted`` TEXT column. SQLite picks it up via
+  ``create_all()`` for fresh dev DBs; existing dev SQLite files need to
+  be deleted (it's dev — we say so in the migration's docstring).
+
+**Alternatives considered.**
+
+- **AWS Secrets Manager / Vault as the storage backend.** Better for
+  production-grade secret rotation. Out of scope for v0 (MVP_SCOPE
+  explicitly defers it). Adopters who need it can populate
+  ``tenant.secrets`` from their backend at boot, layered on top of
+  oratium.
+
+- **Open dict for secrets** (``secrets: dict[str, str]``). More flexible
+  for ad-hoc Phase 4 needs. Rejected — closed model gives static typing
+  at the call site (``tenant.secrets.openai_api_key`` is type-checked,
+  ``tenant.secrets["openai_api_key"]`` is not) and forces every new
+  secret type to land an explicit field with explicit handling.
+
+- **Per-field column encryption** (one DB column per secret). Lets us
+  ask "does this tenant have a custom OpenAI key?" without decryption.
+  Rejected — Phase 4 will add many more secret fields and adding /
+  migrating each one is friction; a single encrypted blob is simpler
+  and the "does this exist" query has no clear consumer.
+
+- **Filename ``oratium/storage/redis.py``.** Matches MVP_SCOPE wording
+  exactly. Rejected because ``import redis`` from within
+  ``oratium.storage.redis`` resolves to the local module, not the
+  library. ``sessions.py`` is clearer about the abstraction
+  ("I'm a session store") and the file's contents.
+
+**Consequences.**
+
+- The ``TenantStore`` protocol shape is unchanged. Encryption is an
+  implementation detail of SQL stores. Phase 4 / 5 contributions can
+  treat ``Tenant`` as plaintext throughout.
+- ``examples/multi_tenant/tenants.example.yaml`` grows a commented
+  ``secrets:`` block showing the shape so adopters see it without
+  needing to read decision 0006.
+- A deployment can mix tenants on different OpenAI accounts on one
+  oratium instance — useful for agency / consultancy patterns.
+- The session store is unused in Phase 3 application code. It sits
+  ready for Phase 5 to wire up resilience (reconnect with context,
+  fallback routing, rate limiting per-call-id).
+- ``ORATIUM_FERNET_KEY`` becomes load-bearing for any deployment using
+  encrypted secrets. We document the
+  ``python -c "from cryptography.fernet import Fernet;
+  print(Fernet.generate_key().decode())"`` recipe in
+  ``.env.example`` (already there since Phase 0).

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from oratium.agent import DEFAULT_MODEL, DEFAULT_VOICE, Agent
-from oratium.tenant import Tenant, TenantAgentConfig
+from oratium.tenant import Tenant, TenantAgentConfig, TenantSecrets
 
 
 def test_tenant_minimal_construction() -> None:
@@ -115,3 +115,60 @@ def test_tenant_round_trips_through_dict() -> None:
     )
     restored = Tenant.model_validate(original.model_dump())
     assert restored == original
+
+
+# --- TenantSecrets ---
+
+
+def test_secrets_default_is_none() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(name="x"),
+    )
+    assert tenant.secrets is None
+
+
+def test_secrets_with_openai_key() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(name="x"),
+        secrets=TenantSecrets(openai_api_key="sk-tenant"),
+    )
+    assert tenant.secrets is not None
+    assert tenant.secrets.openai_api_key == "sk-tenant"
+
+
+def test_secrets_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        TenantSecrets.model_validate({"openai_api_key": "sk-x", "secret_extra": "y"})
+
+
+def test_resolve_api_key_uses_tenant_secret_when_set() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(name="x"),
+        secrets=TenantSecrets(openai_api_key="sk-tenant"),
+    )
+    assert tenant.resolve_api_key("sk-fallback") == "sk-tenant"
+
+
+def test_resolve_api_key_falls_back_when_no_secrets() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(name="x"),
+    )
+    assert tenant.resolve_api_key("sk-fallback") == "sk-fallback"
+
+
+def test_resolve_api_key_falls_back_when_secrets_field_is_none() -> None:
+    tenant = Tenant(
+        id="t1",
+        twilio_number="+15555550100",
+        agent=TenantAgentConfig(name="x"),
+        secrets=TenantSecrets(),  # secrets present but openai_api_key=None
+    )
+    assert tenant.resolve_api_key("sk-fallback") == "sk-fallback"

@@ -17,6 +17,14 @@ tenants:
       voice: alloy
       model: gpt-4o-realtime-preview-2024-12-17
 
+    # Optional per-tenant secrets. In YAML these are plaintext (the file
+    # is on your disk; encryption here is theatre). For SQL-backed
+    # production stores the same fields are encrypted at rest with the
+    # FernetCipher you pass at store construction.
+    #
+    # secrets:
+    #   openai_api_key: sk-tenant-specific-key
+
   - id: sales-line
     twilio_number: "+15555550200"  # replace with your real Twilio number (E.164)
     agent:

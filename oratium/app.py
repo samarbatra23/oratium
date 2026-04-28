@@ -166,15 +166,16 @@ class OratiumApp:
         calls; integration coverage comes from ``examples/quickstart`` and
         ``examples/multi_tenant``.
         """
-        agent = await self._resolve_agent_for_call(websocket, tenant_id)
-        if agent is None:
+        resolution = await self._resolve_call(websocket, tenant_id)
+        if resolution is None:
             return
+        agent, api_key = resolution
 
         playback_tracker = RealtimePlaybackTracker()
         runner = RealtimeRunner(agent.to_realtime_agent())
         session = await runner.run(
             model_config=agent.model_config(
-                api_key=self._api_key,
+                api_key=api_key,
                 playback_tracker=playback_tracker,
             ),
         )
@@ -188,19 +189,21 @@ class OratiumApp:
         )
         await transport.run()
 
-    async def _resolve_agent_for_call(  # pragma: no cover
+    async def _resolve_call(  # pragma: no cover
         self,
         websocket: WebSocket,
         tenant_id: str | None,
-    ) -> Agent | None:
-        """Pick the agent for this websocket connection.
+    ) -> tuple[Agent, str] | None:
+        """Pick the agent and OpenAI API key for this websocket connection.
 
-        Returns ``None`` and closes the websocket if the call should not
-        proceed (multi-tenant mode + missing or unknown tenant).
+        Returns ``(agent, api_key)`` or ``None`` if the call should not
+        proceed (multi-tenant mode + missing or unknown tenant). The
+        per-tenant ``secrets.openai_api_key`` overrides the deployment-wide
+        key when present.
         """
         if self._tenants is None:
             assert self._agent is not None  # validated in __init__
-            return self._agent
+            return self._agent, self._api_key
 
         if tenant_id is None:
             logger.warning("media-stream websocket opened with no tenant param")
@@ -213,7 +216,7 @@ class OratiumApp:
             await websocket.close(code=1003, reason="unknown tenant")
             return None
 
-        return tenant.to_runtime_agent()
+        return tenant.to_runtime_agent(), tenant.resolve_api_key(self._api_key)
 
 
 async def _extract_to_number(request: Request) -> str | None:

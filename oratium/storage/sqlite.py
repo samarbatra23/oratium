@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from oratium.secrets.fernet import FernetCipher
 from oratium.storage._sql_base import _SQLTenantStoreBase
 from oratium.storage._sql_models import Base
 
@@ -16,14 +17,24 @@ class SQLiteTenantStore(_SQLTenantStoreBase):
     No migrations: the schema is created on first :meth:`initialize` call.
     For Postgres deployments where the schema needs to evolve safely, use
     :class:`PostgresTenantStore` and the ``oratium-migrate`` CLI.
+
+    Pass a :class:`FernetCipher` if any tenant will have secrets — without
+    one, ``add_tenant`` raises on insert and reads of rows with secrets
+    raise on fetch.
     """
 
-    def __init__(self, path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        *,
+        cipher: FernetCipher | None = None,
+    ) -> None:
         url = "sqlite+aiosqlite:///:memory:" if path is None else f"sqlite+aiosqlite:///{path}"
         self._engine = create_async_engine(url, echo=False, future=True)
         self._sessionmaker = async_sessionmaker(
             self._engine, class_=AsyncSession, expire_on_commit=False
         )
+        self._cipher = cipher
 
     async def initialize(self) -> None:
         """Create the tenants table if it doesn't exist."""

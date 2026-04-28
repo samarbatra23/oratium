@@ -71,7 +71,7 @@ def test_routes_known_number_to_correct_tenant(
     )
     assert response.status_code == 200
     assert "<Connect>" in response.text
-    assert "wss://example.com/media-stream?tenant=support" in response.text
+    assert "wss://example.com/media-stream/support" in response.text
 
 
 def test_routes_second_number_to_second_tenant(
@@ -86,7 +86,7 @@ def test_routes_second_number_to_second_tenant(
         headers={"Host": "example.com"},
         data={"To": "+15555550200"},
     )
-    assert "wss://example.com/media-stream?tenant=sales" in response.text
+    assert "wss://example.com/media-stream/sales" in response.text
 
 
 def test_unknown_number_returns_no_tenant_twiml(
@@ -129,7 +129,7 @@ def test_get_with_to_query_param_works(
         "/incoming-call?To=%2B15555550100",
         headers={"Host": "example.com"},
     )
-    assert "wss://example.com/media-stream?tenant=support" in response.text
+    assert "wss://example.com/media-stream/support" in response.text
 
 
 # --- single-tenant mode unchanged ---
@@ -143,6 +143,5 @@ def test_single_tenant_mode_still_works(monkeypatch: pytest.MonkeyPatch) -> None
 
     response = client.post("/incoming-call", headers={"Host": "example.com"})
     assert response.status_code == 200
-    assert "wss://example.com/media-stream" in response.text
-    # No tenant query param in single-tenant mode.
-    assert "?tenant=" not in response.text
+    # Single-tenant URL has no tenant suffix at all.
+    assert 'url="wss://example.com/media-stream"' in response.text

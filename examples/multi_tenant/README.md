@@ -51,9 +51,13 @@ field containing the called number. oratium:
    (`YAMLTenantStore` here, but `SQLiteTenantStore` and
    `PostgresTenantStore` are drop-in replacements).
 2. Returns TwiML that bridges the call to
-   `wss://<host>/media-stream?tenant=<tenant_id>`.
-3. The websocket handler reads the `tenant` query param, refetches the
-   tenant, and builds the runtime agent for this call.
+   `wss://<host>/media-stream/<tenant_id>`.
+3. The websocket handler reads the tenant id from the URL path,
+   refetches the tenant, and builds the runtime agent for this call.
+
+(The path segment, not a query string — Twilio's `<Stream>` URL handling
+strips query strings on the actual websocket connection. Decision 0005
+in `docs/architecture.md` has the details.)
 
 Calls to numbers not in the YAML get a polite "this number is not
 configured" message instead of fast-busy.

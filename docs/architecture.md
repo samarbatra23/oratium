@@ -334,14 +334,15 @@ lives in YAML or a database, not a UI.
   the OratiumApp construction.
 
 - **Tenant routing: Twilio ``To`` parameter at the webhook, threaded
-  through to the websocket via URL query.** Twilio's POST to
+  through to the websocket via a path segment.** Twilio's POST to
   ``/incoming-call`` includes a ``To`` form field with the called E.164
   number. The webhook resolves the tenant via
   ``store.get_by_twilio_number(to)``, then generates TwiML with
-  ``wss://host/media-stream?tenant={id}``. The websocket handler reads
-  the query param, refetches the tenant by id, builds the agent. Tenant
-  resolution happens *once* at webhook time; the websocket handler trusts
-  the resolved id.
+  ``wss://host/media-stream/{tenant_id}`` (path segment, not query
+  string — see the addendum below). The websocket handler receives the
+  tenant id as a FastAPI path parameter, refetches the tenant by id, and
+  builds the agent. Tenant resolution happens *once* at webhook time;
+  the websocket handler trusts the resolved id.
 
 - **Coexistence with single-tenant mode.** ``OratiumApp(agent=Agent(...))``
   (Phase 1) and ``OratiumApp(tenants=TenantStore(...))`` (Phase 2) are
@@ -416,3 +417,13 @@ lives in YAML or a database, not a UI.
   one DB query per call.
 - **The ``oratium-migrate`` CLI** ships with the package. Adopters running
   Postgres run it once on first boot and again after each upgrade.
+
+**Addendum (2026-04-28, post-first-call test).** The original Phase 2
+implementation used a URL query string (``?tenant={id}``) on the
+``<Stream>`` URL, on the assumption that Twilio passes query strings
+through to the Media Streams websocket. First end-to-end call with a real
+Twilio number disproved this: the webhook routed the call correctly, but
+the websocket connection arrived at ``/media-stream`` with no query
+string. The fix is to use a path segment (``/media-stream/{tenant_id}``)
+which Twilio reliably preserves. Implemented same-day; tests updated to
+match.

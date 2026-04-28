@@ -127,42 +127,66 @@ class OratiumApp:
                 return PlainTextResponse(content=_NO_TENANT_TWIML, media_type="text/xml")
 
             logger.info("Routing inbound call to %s -> tenant %s", to_number, tenant.id)
-            stream_path = f"{self._media_stream_path}?tenant={tenant.id}"
+            # Tenant id travels as a path segment, not a query string. Twilio's
+            # <Stream> URL handling drops query strings on the actual Media
+            # Streams websocket connection, so the websocket would arrive
+            # without the tenant param. A path segment is unambiguous.
+            stream_path = f"{self._media_stream_path}/{tenant.id}"
             twiml = _TWIML_TEMPLATE.format(host=host, path=stream_path)
             return PlainTextResponse(content=twiml, media_type="text/xml")
 
-        @app.websocket(self._media_stream_path)
-        async def media_stream(  # pragma: no cover
-            websocket: WebSocket,
-            tenant: str | None = None,
-        ) -> None:
-            # Orchestrates SDK calls (RealtimeRunner, RealtimeSession.enter)
-            # plus the transport. Unit-testing this would mostly exercise the
-            # SDK; integration coverage comes from examples/quickstart and
-            # examples/multi_tenant.
-            agent = await self._resolve_agent_for_call(websocket, tenant)
-            if agent is None:
-                return
+        if self._tenants is None:
 
-            playback_tracker = RealtimePlaybackTracker()
-            runner = RealtimeRunner(agent.to_realtime_agent())
-            session = await runner.run(
-                model_config=agent.model_config(
-                    api_key=self._api_key,
-                    playback_tracker=playback_tracker,
-                ),
-            )
-            await session.enter()
-            logger.info("Session opened; sending greeting trigger to agent")
-            await session.send_message("Hello")
-            transport = TwilioMediaStreamTransport(
-                websocket=websocket,
-                session=session,
-                playback_tracker=playback_tracker,
-            )
-            await transport.run()
+            @app.websocket(self._media_stream_path)
+            async def media_stream_single(  # pragma: no cover
+                websocket: WebSocket,
+            ) -> None:
+                await self._run_session(websocket, tenant_id=None)
+
+        else:
+
+            @app.websocket(f"{self._media_stream_path}/{{tenant}}")
+            async def media_stream_multi(  # pragma: no cover
+                websocket: WebSocket,
+                tenant: str,
+            ) -> None:
+                await self._run_session(websocket, tenant_id=tenant)
 
         return app
+
+    async def _run_session(  # pragma: no cover
+        self,
+        websocket: WebSocket,
+        tenant_id: str | None,
+    ) -> None:
+        """Run a full call: resolve agent, build session, drive transport.
+
+        Shared between single-tenant and multi-tenant websocket routes.
+        Marked ``no cover`` because the body is mostly orchestration of SDK
+        calls; integration coverage comes from ``examples/quickstart`` and
+        ``examples/multi_tenant``.
+        """
+        agent = await self._resolve_agent_for_call(websocket, tenant_id)
+        if agent is None:
+            return
+
+        playback_tracker = RealtimePlaybackTracker()
+        runner = RealtimeRunner(agent.to_realtime_agent())
+        session = await runner.run(
+            model_config=agent.model_config(
+                api_key=self._api_key,
+                playback_tracker=playback_tracker,
+            ),
+        )
+        await session.enter()
+        logger.info("Session opened; sending greeting trigger to agent")
+        await session.send_message("Hello")
+        transport = TwilioMediaStreamTransport(
+            websocket=websocket,
+            session=session,
+            playback_tracker=playback_tracker,
+        )
+        await transport.run()
 
     async def _resolve_agent_for_call(  # pragma: no cover
         self,

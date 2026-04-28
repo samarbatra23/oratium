@@ -87,3 +87,8 @@ Thumbs.db
 
 # Local quickstart artifacts
 oratium.sqlite3
+
+# Local example configs (each has a .example template that *is* tracked).
+# Keeps real Twilio numbers / secrets out of the repo while letting adopters
+# `cp <name>.example.yaml <name>.yaml` and edit.
+examples/multi_tenant/tenants.yaml

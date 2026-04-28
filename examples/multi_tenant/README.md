@@ -15,9 +15,17 @@ Same as the [single-tenant quickstart](../quickstart/README.md):
 
 ## Steps
 
-1. **Edit `tenants.yaml`.** Replace the placeholder `twilio_number` values
-   with your two real Twilio numbers in E.164 format (`+15555550100` style).
-   Customize the agent `name`, `instructions`, and `voice` per tenant.
+1. **Copy the example config and edit it.**
+
+   ```bash
+   cp examples/multi_tenant/tenants.example.yaml examples/multi_tenant/tenants.yaml
+   ```
+
+   Replace the placeholder `twilio_number` values with your two real Twilio
+   numbers in E.164 format (`+15555550100` style). Customize the agent
+   `name`, `instructions`, and `voice` per tenant. `tenants.yaml` is
+   gitignored — your real numbers stay local; the `.example.yaml` template
+   is what ships in the repo.
 
 2. **Install oratium and start the server.**
 

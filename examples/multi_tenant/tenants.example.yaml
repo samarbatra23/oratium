@@ -1,9 +1,12 @@
-# Multi-tenant configuration for the oratium multi-tenant example.
-# Replace the twilio_number values with your actual Twilio numbers (E.164 format).
+# Template for the multi-tenant example. Copy to tenants.yaml and edit:
+#
+#   cp tenants.example.yaml tenants.yaml
+#
+# tenants.yaml is gitignored — your real Twilio numbers stay local.
 
 tenants:
   - id: support-line
-    twilio_number: "+15555550100"
+    twilio_number: "+15555550100"  # replace with your real Twilio number (E.164)
     agent:
       name: Support
       instructions: |
@@ -15,7 +18,7 @@ tenants:
       model: gpt-4o-realtime-preview-2024-12-17
 
   - id: sales-line
-    twilio_number: "+15555550200"
+    twilio_number: "+15555550200"  # replace with your real Twilio number (E.164)
     agent:
       name: Sales
       instructions: |

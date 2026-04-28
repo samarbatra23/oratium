@@ -159,3 +159,66 @@ shape is forced.
 - `oratium.Agent` is intentionally separate from `agents.realtime.RealtimeAgent`.
   Phase 4's `UnifiedTools` layer will plug in here without changing
   `RealtimeAgent`'s shape.
+
+---
+
+## 0003 — Agent greeting trigger on call connect
+
+**Date:** 2026-04-28
+
+**Context.** First end-to-end Twilio call against the Phase 1 quickstart
+revealed two facts the unit-tested paths could not surface: OpenAI Realtime
+does not generate a response until it receives input (turn detection waits
+for user audio), so the call connected silently. The reference SDK example
+masks this by playing a TwiML ``<Say>`` greeting via Twilio's TTS before the
+WebSocket connects — the caller hears Twilio's robotic voice first, then the
+agent's voice once they speak. For oratium, that voice-quality jump is
+exactly the production-readiness gap the project is meant to close.
+
+**Decision.** After ``session.enter()`` and before handing control to
+``TwilioMediaStreamTransport.run()``, the websocket handler in
+``OratiumApp`` calls ``session.send_message("Hello")`` to nudge the model
+into producing an immediate response. The agent's ``instructions`` string
+is responsible for the actual greeting content; the nudge only triggers
+the turn. The caller hears the agent's configured voice from the very first
+syllable — no TTS hand-off.
+
+**Alternatives considered.**
+
+- **TwiML ``<Say>`` greeting (the SDK example pattern).** Reliable: plays
+  even if the WebSocket is slow to negotiate. Rejected because the
+  voice-quality jump from Twilio TTS to the agent voice is jarring and
+  signals "demo" not "production." A real production deployment is
+  expected to keep voice consistent end-to-end.
+
+- **Lower-level ``response.create`` event via ``RealtimeModelSendRawMessage``.**
+  Cleanest from a transcript perspective (no fake user "Hello" appears in
+  the conversation history). Rejected because it depends on internal SDK
+  surfaces that may shift between versions; ``send_message`` is the
+  documented public API.
+
+- **Make greeting opt-in via an ``OratiumApp`` parameter.** Considered. Not
+  every agent should greet first (debt collection, security verification,
+  inbound-only agents). Deferred: for Phase 1 the trigger is unconditional
+  and adopters can suppress it by writing ``instructions`` that say
+  "respond with one word: 'continue'" or similar. Phase 2 (multi-tenant)
+  will add a per-tenant ``greet_on_connect`` config field where this
+  belongs.
+
+**Consequences.**
+
+- The synthetic "Hello" appears in the conversation transcript as a user
+  message. Adopters who want clean transcripts will need the ``response.create``
+  approach later; this is acceptable because v0 doesn't ship transcript
+  export and Phase 5 observability will surface this clearly.
+- Personality and lifecycle are now visibly separate concerns:
+  ``Agent.instructions`` controls *what* the agent says; the websocket
+  handler in ``OratiumApp`` controls *when* it speaks first. Phase 2's
+  per-tenant config will give that lifecycle knob a proper home.
+- Quickstart instructions tightened to anticipate the synthetic opener
+  ("The call has just connected. Open with a brief, warm greeting...").
+  This makes the agent's first turn read naturally instead of as a literal
+  reply to the word "Hello".
+- The websocket handler is still in the ``# pragma: no cover`` region per
+  decision 0002. The greeting trigger was verified end-to-end with a real
+  Twilio call rather than via mocked unit tests.

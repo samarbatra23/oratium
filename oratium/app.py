@@ -104,6 +104,12 @@ class OratiumApp:
                 ),
             )
             await session.enter()
+            # OpenAI Realtime waits for user input before generating a
+            # response. To make the agent greet the caller in its own voice
+            # (not Twilio's TTS), nudge the session with a synthetic opener.
+            # The agent's instructions drive what the greeting actually says.
+            logger.info("Session opened; sending greeting trigger to agent")
+            await session.send_message("Hello")
             transport = TwilioMediaStreamTransport(
                 websocket=websocket,
                 session=session,
